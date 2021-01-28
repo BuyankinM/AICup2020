@@ -57,7 +57,7 @@ def get_unit_area(radius, size):
 @njit(void(int16[:, :, :], float64[:, :]))
 def fill_res_map(all_map, res_go_map):
     hq = []
-    visited = np.zeros((80, 80), dtype=np.int8)
+    visited = np.full((80, 80), False)
 
     forest_ind = np.argwhere(res_go_map == 0)
     if not forest_ind.shape[0]:
@@ -65,85 +65,74 @@ def fill_res_map(all_map, res_go_map):
 
     for x, y in forest_ind:
         hq.append((0, x, y))
-        visited[x, y] = 2
+        visited[x, y] = True
 
     xy_ar = np.zeros(2, dtype=np.int64)
-    ways = np.array([(-1, 0), (0, +1), (+1, 0), (0, -1)], dtype=np.int64)
+    ways = np.array([(+1, 0), (0, +1), (-1, 0), (0, -1)], dtype=np.int64)
 
     while hq:
         d, x, y = heappop(hq)
         xy_ar[0] = x
         xy_ar[1] = y
-        visited[x, y] = 1
 
         new_ways = ways + xy_ar
         for x_new, y_new in new_ways:
 
             if 0 <= x_new <= 79 and 0 <= y_new <= 79:
 
-                if visited[x_new, y_new] == 1 \
-                        or res_go_map[x_new, y_new] == 0:
+                if visited[x_new, y_new]:
                     continue
                 else:
+                    visited[x_new, y_new] = True
                     val_map = all_map[x_new, y_new, 0]
-
-                    if val_map > 0 or res_go_map[x_new, y_new] == -1:
-                        visited[x_new, y_new] = 1
+                    if val_map not in (0, -1) \
+                            or res_go_map[x_new, y_new] == -1:
                         continue
-                    elif val_map == 0:
-                        w = 1
-                    elif val_map == -1:
-                        w = 2
 
-                d_new = d + w
+                d_new = d + (1 if val_map == 0 else 2)
                 if res_go_map[x_new, y_new] > d_new:
                     res_go_map[x_new, y_new] = d_new
 
-                if visited[x_new, y_new] == 0:
-                    heappush(hq, (d_new, x_new, y_new))
-                    visited[x_new, y_new] = 2
+                heappush(hq, (d_new, x_new, y_new))
 
 
 @njit(void(int16[:, :, :], float64[:, :]))
 def fill_enemy_map(all_map, enemy_go_map):
     hq = []
-    visited = np.zeros((80, 80), dtype=np.int8)
+    visited = np.full((80, 80), False)
 
     enemy_ind = np.argwhere(enemy_go_map == 0)
     for x, y in enemy_ind:
         hq.append((0, x, y))
-        visited[x, y] = 2
+        visited[x, y] = True
 
     xy_ar = np.zeros(2, dtype=np.int64)
-    ways = np.array([(-1, 0), (0, +1), (+1, 0), (0, -1)], dtype=np.int64)
+    ways = np.array([(+1, 0), (0, +1), (-1, 0), (0, -1)], dtype=np.int64)
 
     while hq:
         d, x, y = heappop(hq)
         xy_ar[0] = x
         xy_ar[1] = y
-        visited[x, y] = 1
 
         new_ways = ways + xy_ar
         for x_new, y_new in new_ways:
 
             if 0 <= x_new <= 79 and 0 <= y_new <= 79:
 
-                if visited[x_new, y_new] == 1 \
-                        or enemy_go_map[x_new, y_new] == 0:
+                if visited[x_new, y_new]:
                     continue
                 else:
+                    visited[x_new, y_new] = True
                     val_map = all_map[x_new, y_new, 0]
-                    if val_map not in (0, -1, 90, 8, 6) \
+                    if val_map not in (0, -1, 90, 8) \
                             or enemy_go_map[x_new, y_new] == -1:
-                        visited[x, y] = 1
                         continue
 
                 if val_map == 0:
                     w = 1
                 elif val_map == -1:
                     w = 2
-                elif val_map == 8 \
-                        or val_map == 6:
+                elif val_map == 8:
                     w = 2
                 elif val_map == 90:
                     w = all_map[x_new, y_new, 4] // 5
@@ -152,59 +141,53 @@ def fill_enemy_map(all_map, enemy_go_map):
                 if enemy_go_map[x_new, y_new] > d_new:
                     enemy_go_map[x_new, y_new] = d_new
 
-                if visited[x_new, y_new] == 0:
-                    heappush(hq, (d_new, x_new, y_new))
-                    visited[x_new, y_new] = 2
+                heappush(hq, (d_new, x_new, y_new))
 
 
 @njit(void(int16[:, :, :], float64[:, :]))
 def fill_friends_map(all_map, friends_go_map):
     hq = []
-    visited = np.zeros((80, 80), dtype=np.int8)
+    visited = np.full((80, 80), False)
 
     enemy_ind = np.argwhere(friends_go_map == 0)
     for x, y in enemy_ind:
-        hq.append((0, x, y))
-        visited[x, y] = 2
+        hq.append((0.0, x, y))
+        visited[x, y] = True
 
     xy_ar = np.zeros(2, dtype=np.int64)
-    ways = np.array([(-1, 0), (0, +1), (+1, 0), (0, -1)], dtype=np.int64)
+    ways = np.array([(+1, 0), (0, +1), (-1, 0), (0, -1)], dtype=np.int64)
 
     while hq:
         d, x, y = heappop(hq)
         xy_ar[0] = x
         xy_ar[1] = y
-        visited[x, y] = 1
 
         new_ways = ways + xy_ar
         for x_new, y_new in new_ways:
 
             if 0 <= x_new <= 79 and 0 <= y_new <= 79:
 
-                if visited[x_new, y_new] == 1 \
-                        or friends_go_map[x_new, y_new] == 0:
+                if visited[x_new, y_new]:
                     continue
                 else:
+                    visited[x_new, y_new] = True
                     val_map = all_map[x_new, y_new, 0]
                     if val_map not in (0, -1, 90, 8, 6) \
                             or friends_go_map[x_new, y_new] == -1:
-                        visited[x, y] = 1
                         continue
 
                 if val_map <= 0:
                     w = 1
                 elif val_map <= 8:
-                    w = 2
+                    w = 0.5
                 elif val_map == 90:
-                    w = all_map[x_new, y_new, 4] // 5
+                    w = all_map[x_new, y_new, 4] // 10
 
                 d_new = d + w
                 if friends_go_map[x_new, y_new] > d_new:
                     friends_go_map[x_new, y_new] = d_new
 
-                if visited[x_new, y_new] == 0:
-                    heappush(hq, (d_new, x_new, y_new))
-                    visited[x_new, y_new] = 2
+                heappush(hq, (d_new, x_new, y_new))
 
 
 @njit(void(int16[:, :, :], float64[:, :], int8[:, :], int8[:, :], int8[:, :]))
