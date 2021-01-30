@@ -264,6 +264,32 @@ def correct_coords_fast(all_map, default_coords, x_pos, y_pos, check_free=True):
     return actual_coord
 
 
+@njit(int16[:, :](int16[:, :, :], int8[:, :], int64, int64))
+def get_precision_attack_map(all_map, range_attack, x_pos, y_pos):
+
+    attack_coord = correct_coords_fast(all_map, range_attack, x_pos, y_pos, False)
+
+    n = attack_coord.shape[0]
+    m = all_map.shape[2]
+    attack_map = np.zeros((n, m), dtype=np.int16)
+
+    for i in range(n):
+        x, y = attack_coord[i]
+        for j in range(m):
+            attack_map[i, j] = all_map[x, y, j]
+
+    # get health mask
+    health_mask = attack_map[:, 4] > 0
+
+    # get enemy mask (MELEE_UNIT, RANGED_UNIT)
+    attack_mask = health_mask & ((attack_map[:, 0] == 80) | (attack_map[:, 0] == 60))
+
+    if not attack_mask.any():
+        # get enemy mask (BUILDER_UNIT)
+        attack_mask = health_mask & (attack_map[:, 0] == 40)
+
+    return attack_map[attack_mask]
+
 # @njit(int16[:, :](int16[:, :, :], int8[:, :], int8[:, :], int64))
 # def get_list_to_build(all_map, building_coords, near_house_coords, size):
 #
@@ -338,6 +364,18 @@ def correct_coords_fast(all_map, default_coords, x_pos, y_pos, check_free=True):
 class MyStrategy:
 
     def __init__(self):
+        self.time_dict = {"a": 0,
+                          "p": 0,
+                          "mc": 0,
+                          "ud": 0,
+                          "res": 0,
+                          "fr": 0,
+                          "en": 0,
+                          "rep": 0,
+                          "h": 0,
+                          "base": 0,
+                          "bu": 0,
+                          "ru": 0}
         self.t_main = 0
         self.t_per = 0
         self.per_time = 50
@@ -462,8 +500,8 @@ class MyStrategy:
 
         return x, y, manh_dist
 
-    def collect_data_for_attack(self, attack_map, attack_mask, precision_attack, counter_unit, ru_id):
-        for info in attack_map[attack_mask]:
+    def collect_data_for_attack(self, attack_map, precision_attack, counter_unit, ru_id):
+        for info in attack_map:
             id_en = info[1]
             if id_en not in precision_attack:
                 precision_attack[id_en] = {"health": info[4], "my_ens": []}
@@ -473,7 +511,7 @@ class MyStrategy:
 
     def get_action(self, player_view, debug_interface):
 
-        start = time.time()
+        start_all = time.time()
 
         result = Action({})
         my_id = player_view.my_id
@@ -497,7 +535,7 @@ class MyStrategy:
         self.all_map.fill(0)
         self.res_go_map.fill(np.inf)
         self.enemy_go_map.fill(np.inf)
-        if self.is_dark_near or not self.cur_tick % 3:
+        if self.is_dark_near or not self.cur_tick % 2:
             self.friend_go_map.fill(np.inf)
 
         self.max_population = 0
@@ -516,6 +554,7 @@ class MyStrategy:
             self.is_final = True
             self.max_builders = 80
 
+        start = time.time()
         for entity in player_view.entities:
 
             ent_type = entity.entity_type
@@ -602,8 +641,12 @@ class MyStrategy:
                 list_melee_units.append(entity)
                 self.friend_go_map[pos.x, pos.y] = 0
 
+        self.time_dict["mc"] += (time.time() - start) * 1000
+
         if self.cur_tick == 1:
             self.is_dark_near = EntityType.RANGED_BASE not in my_buildings
+
+        start = time.time()
 
         if watch_in_dark:
             first_layer = self.all_map[:, :, 0]
@@ -616,6 +659,9 @@ class MyStrategy:
             self.res_area[self.zero_area == 0] = 0
             self.res_area[first_layer == self.type_resource] = 1
             self.res_go_map[(dark_mask) & (self.res_area == 1)] = 0
+
+        self.time_dict["ud"] += (time.time() - start) * 1000
+        start = time.time()
 
         # RESOURCE MAP
         if not resource_here:
@@ -630,10 +676,16 @@ class MyStrategy:
                                self.turret_control)
         fill_res_map(self.all_map, self.res_go_map)
 
+        self.time_dict["res"] += (time.time() - start) * 1000
+        start = time.time()
+
         # FRIEND MAP
-        if self.is_dark_near or not self.cur_tick % 3 \
+        if self.is_dark_near or not self.cur_tick % 2 \
                 and (len(list_range_units) + len(list_melee_units)) > 2:
             fill_friends_map(self.all_map, self.friend_go_map)
+
+        self.time_dict["fr"] += (time.time() - start) * 1000
+        start = time.time()
 
         # ENEMY MAP
         if not enemy_here:
@@ -660,10 +712,14 @@ class MyStrategy:
             self.enemy_go_map[self.all_map[:, :, 0] == self.type_resource] = np.inf
             fill_enemy_map(self.all_map, self.enemy_go_map)
 
+        self.time_dict["en"] += (time.time() - start) * 1000
+
         len_bu = len(list_builders_units)
         all_units = len_bu + len(list_range_units) + len(list_melee_units)
 
         self.check_base_status()
+
+        start = time.time()
 
         # REPAIR
         result_broken_buildings = [(coord, bu_id, dict_broken_buildings[coord]) for (coord, bu_id) in
@@ -671,12 +727,18 @@ class MyStrategy:
         if result_broken_buildings and (num_repairs_to_houses // 2) < len(result_broken_buildings):
             self.repair_buildings(result_broken_buildings, result)
 
+        self.time_dict["rep"] += (time.time() - start) * 1000
+        start = time.time()
+
         # NEW BUILDINGS
         max_builders_for_houses = round(len_bu * self.coef_builders_to_houses)
         max_builders_for_houses = max(0, max_builders_for_houses - len(dict_coord_bilder_to_houses))
         max_houses_to_build = max_builders_for_houses if (all_units >= self.max_population) else 0
         if max_houses_to_build:
             self.build_houses(my_buildings, max_houses_to_build, dict_coord_bilder_to_houses, result)
+
+        self.time_dict["h"] += (time.time() - start) * 1000
+        start = time.time()
 
         # BUILDER BASE
         need_to_build = len_bu < self.max_builders \
@@ -692,11 +754,21 @@ class MyStrategy:
                         and self.my_resource // 20 >= 1
         self.melee_base_action(my_buildings, need_to_build, result)
 
+        self.time_dict["base"] += (time.time() - start) * 1000
+
+        start = time.time()
+
         if list_builders_units:
             self.builder_unit_action(list_builders_units, result)
 
+        self.time_dict["bu"] += (time.time() - start) * 1000
+
+        start = time.time()
+
         if list_range_units:
             self.range_unit_action(list_range_units, result)
+
+        self.time_dict["ru"] += (time.time() - start) * 1000
 
         if list_melee_units:
             self.melee_unit_action(list_melee_units, result)
@@ -704,14 +776,21 @@ class MyStrategy:
         if list_turrets:
             self.turret_unit_action(list_turrets, result)
 
-        end = time.time()
-        t = (end - start) * 1000
-        self.t_main += t
-        self.t_per += t
+        end_all = time.time()
+        self.time_dict["a"] += (end_all - start_all) * 1000
+        self.time_dict["p"] += (end_all - start_all) * 1000
 
         if self.cur_tick and not self.cur_tick % self.per_time:
-            print(f"{self.cur_tick:3d} = {self.t_per:8.2f} / {self.t_main:8.2f}")
-            self.t_per = 0
+            res_t = f"{self.cur_tick:3d} = a:{self.time_dict['a']:7.1f}"
+
+            for k in self.time_dict:
+                if k == "a":
+                    continue
+                val = self.time_dict[k]
+                res_t += f", {k}:{val:7.1f}"
+                self.time_dict[k] = 0
+
+            print(res_t)
 
         return result
 
@@ -1079,23 +1158,10 @@ class MyStrategy:
 
             id_enemy = None
 
-            attack_coord = correct_coords_fast(self.all_map, self.range_attack, x_pos, y_pos, False)
-
-            # get map
-            attack_map = self.all_map[attack_coord[:, 0], attack_coord[:, 1]]
-
-            # get enemy mask
-            attack_mask = np.isin(attack_map[:, 0], (self.type_enemy_range, self.type_enemy_melee)) \
-                          & (attack_map[:, 4] > 0)
-            if attack_mask.any():
-                self.collect_data_for_attack(attack_map, attack_mask, precision_attack, counter_unit, range_unit.id)
+            attack_map = get_precision_attack_map(self.all_map, self.range_attack, x_pos, y_pos)
+            if attack_map.any():
+                self.collect_data_for_attack(attack_map, precision_attack, counter_unit, range_unit.id)
                 continue
-            else:
-                attack_mask = (attack_map[:, 0] == self.type_enemy_builder) \
-                              & (attack_map[:, 4] > 0)
-                if attack_mask.any():
-                    self.collect_data_for_attack(attack_map, attack_mask, precision_attack, counter_unit, range_unit.id)
-                    continue
 
             oper = "Group"
             if self.status_base == "WAR":
@@ -1246,7 +1312,7 @@ class MyStrategy:
 
         if len(near_ways_free):
             if res_type \
-                    or not self.is_dark_near and not self.cur_tick % 3:
+                    or not self.is_dark_near and not self.cur_tick % 2:
                 ind = np.argmin(near_ways_free)
             else:
                 near_friends = friend_map[unit_coord[:, 0], unit_coord[:, 1]]
