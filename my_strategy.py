@@ -54,6 +54,24 @@ def get_unit_area(radius, size):
     return light_mas
 
 
+@njit(int8[:, :](int16[:, :, :], int8[:, :], int8, int8, boolean))
+def correct_coords_fast(all_map, default_coords, x_pos, y_pos, check_free=True):
+    # correct to point
+    actual_coord = default_coords + np.array([x_pos, y_pos])
+
+    # check bounds
+    actual_coord = actual_coord[(actual_coord[:, 0] >= 0) & (actual_coord[:, 1] >= 0)
+                                & (actual_coord[:, 0] < 80) & (actual_coord[:, 1] < 80)]
+
+    if check_free:
+        mask = np.full(actual_coord.shape[0], False)
+        for i, (x, y) in enumerate(actual_coord):
+            mask[i] = (all_map[x, y, 0] == 0)
+        actual_coord = actual_coord[mask]
+
+    return actual_coord
+
+
 @njit(void(int16[:, :, :], float64[:, :]))
 def fill_res_map(all_map, res_go_map):
     hq = []
@@ -192,23 +210,31 @@ def fill_friends_map(all_map, friends_go_map):
 
 @njit(void(int16[:, :, :], float64[:, :], int8[:, :], int8[:, :], int8[:, :]))
 def fill_control_res_poles(all_map, res_go_map, range_control, melee_control, turret_control):
+
+    set_id = set()
+
     for x in range(80):
         for y in range(80):
-            if all_map[x, y, 0] == 80:
+            if all_map[x, y, 0] == 90:
+                res_go_map[x, y] = 0
+                continue
+            elif all_map[x, y, 0] == 80:
                 default_coords = range_control
             elif all_map[x, y, 0] == 60:
                 default_coords = melee_control
             elif all_map[x, y, 0] == 100:
+
+                id = all_map[x, y, 1]
+                if id in set_id:
+                    continue
+                else:
+                    set_id.add(id)
+
                 default_coords = turret_control
             else:
                 continue
 
-            # correct to point
-            actual_coord = default_coords + np.array([x, y])
-
-            # check bounds
-            actual_coord = actual_coord[(actual_coord[:, 0] >= 0) & (actual_coord[:, 1] >= 0)
-                                        & (actual_coord[:, 0] < 80) & (actual_coord[:, 1] < 80)]
+            actual_coord = correct_coords_fast(all_map, default_coords, x, y, False)
 
             for xp, yp in actual_coord:
                 res_go_map[xp, yp] = -1
@@ -216,52 +242,56 @@ def fill_control_res_poles(all_map, res_go_map, range_control, melee_control, tu
 
 @njit(void(int16[:, :, :], float64[:, :], int8[:, :], int8[:, :], int8[:, :], int8[:, :]))
 def fill_enemy_poles(all_map, enemy_go_map, range_attack, turret_attack, melee_control, turret_control):
+
+    set_id = set()
+
     for x in range(80):
         for y in range(80):
             pole = 0
 
             if all_map[x, y, 0] == 80 \
                     or all_map[x, y, 0] == 60:
+
                 default_coords = range_attack
+
             elif all_map[x, y, 0] == 40:
+
                 default_coords = melee_control
+
             elif all_map[x, y, 0] == 100:
+
+                id = all_map[x, y, 1]
+                if id in set_id:
+                    continue
+                else:
+                    set_id.add(id)
+
                 if all_map[x, y, 2] == 1:
                     # is broken
                     default_coords = turret_attack
                 else:
-                    default_coords = turret_control
-                    pole = -1
+                    # check ready for attack
+                    num_ru = 0
+                    control_coord = correct_coords_fast(all_map, turret_control, x, y, False)
+                    for xc, yc in control_coord:
+                        if all_map[xc, yc, 0] == 80:
+                            num_ru += 1
+
+                    if num_ru >= 10:
+                        # kill it!!!
+                        default_coords = turret_attack
+                    else:
+                        # stop here!
+                        default_coords = turret_control
+                        pole = -1
+
             else:
                 continue
 
-            # correct to point
-            actual_coord = default_coords + np.array([x, y])
-
-            # check bounds
-            actual_coord = actual_coord[(actual_coord[:, 0] >= 0) & (actual_coord[:, 1] >= 0)
-                                        & (actual_coord[:, 0] < 80) & (actual_coord[:, 1] < 80)]
+            actual_coord = correct_coords_fast(all_map, default_coords, x, y, False)
 
             for xp, yp in actual_coord:
                 enemy_go_map[xp, yp] = pole
-
-
-@njit(int8[:, :](int16[:, :, :], int8[:, :], int8, int8, boolean))
-def correct_coords_fast(all_map, default_coords, x_pos, y_pos, check_free=True):
-    # correct to point
-    actual_coord = default_coords + np.array([x_pos, y_pos])
-
-    # check bounds
-    actual_coord = actual_coord[(actual_coord[:, 0] >= 0) & (actual_coord[:, 1] >= 0)
-                                & (actual_coord[:, 0] < 80) & (actual_coord[:, 1] < 80)]
-
-    if check_free:
-        mask = np.full(actual_coord.shape[0], False)
-        for i, (x, y) in enumerate(actual_coord):
-            mask[i] = (all_map[x, y, 0] == 0)
-        actual_coord = actual_coord[mask]
-
-    return actual_coord
 
 
 @njit(int16[:, :](int16[:, :, :], int8[:, :], int64, int64))
@@ -546,7 +576,7 @@ class MyStrategy:
 
         dark_map = None
         watch_in_dark = self.cur_tick == 1 \
-                        or self.is_dark_near and self.cur_tick < 800
+                        or self.is_dark_near and self.cur_tick < 900
         if watch_in_dark:
             dark_map = np.ones((80, 80), dtype=np.int8)
 
@@ -577,11 +607,9 @@ class MyStrategy:
             if not its_my:
 
                 enemy_here = enemy_here or ent_type != EntityType.RESOURCE
+                resource_here = resource_here or ent_type == EntityType.RESOURCE
 
-                if ent_type == EntityType.RESOURCE:
-                    resource_here = True
-                    self.res_go_map[pos.x, pos.y] = 0
-                elif size >= 3:
+                if size >= 3:
                     self.enemy_go_map[pos.x: pos.x + size, pos.y: pos.y + size] = 0
 
                 continue
