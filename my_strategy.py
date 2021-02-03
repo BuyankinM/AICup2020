@@ -210,7 +210,6 @@ def fill_friends_map(all_map, friends_go_map):
 
 @njit(void(int16[:, :, :], float64[:, :], int8[:, :], int8[:, :], int8[:, :]))
 def fill_control_res_poles(all_map, res_go_map, range_control, melee_control, turret_control):
-
     set_id = set()
 
     for x in range(80):
@@ -242,7 +241,6 @@ def fill_control_res_poles(all_map, res_go_map, range_control, melee_control, tu
 
 @njit(void(int16[:, :, :], float64[:, :], int8[:, :], int8[:, :], int8[:, :], int8[:, :]))
 def fill_enemy_poles(all_map, enemy_go_map, range_attack, turret_attack, melee_control, turret_control):
-
     set_id = set()
 
     for x in range(80):
@@ -296,7 +294,6 @@ def fill_enemy_poles(all_map, enemy_go_map, range_attack, turret_attack, melee_c
 
 @njit(int16[:, :](int16[:, :, :], int8[:, :], int64, int64))
 def get_precision_attack_map(all_map, range_attack, x_pos, y_pos):
-
     attack_coord = correct_coords_fast(all_map, range_attack, x_pos, y_pos, False)
 
     n = attack_coord.shape[0]
@@ -320,76 +317,83 @@ def get_precision_attack_map(all_map, range_attack, x_pos, y_pos):
 
     return attack_map[attack_mask]
 
-# @njit(int16[:, :](int16[:, :, :], int8[:, :], int8[:, :], int64))
-# def get_list_to_build(all_map, building_coords, near_house_coords, size):
-#
-#     n = building_coords.shape[0]
-#     result_search = np.zeros((n, 6), dtype=np.int16)
-#
-#     for i in range(n) :
-#         x_house, y_house = building_coords[i]
-#         free_place_for_house = not all_map[x_house:x_house + size, y_house:y_house + size, 0].any()
-#         if not free_place_for_house:
-#             result_search[i, 0] = 9999
-#             continue
-#
-#         near_house_coord = correct_coords_fast(all_map, near_house_coords, x_house, y_house, True)
-#         if not near_house_coord.shape[0]:
-#             result_search[i, 0] = 9999
-#             continue
-#
-#         find_nearest_builder(all_map, near_house_coord)
-#
-#
-# @njit(int16[:](int16[:, :, :], int8[:, :]))
-# def find_nearest_builder(all_map, near_house_coord):
-#
-#     result = np.zeros(4, dtype=np.int16)
-#     map_search = np.full((80, 80, 3), np.inf)
-#
-#     hq = []
-#     visited = np.full((80, 80), False)
-#
-#     for x, y in near_house_coord:
-#         hq.append((0, x, y))
-#         visited[x, y] = True
-#
-#     xy_ar = np.zeros(2, dtype=np.int64)
-#     ways = np.array([(-1, 0), (0, +1), (+1, 0), (0, -1)], dtype=np.int64)
-#
-#     while hq:
-#         d, x, y = heappop(hq)
-#         xy_ar[0] = x
-#         xy_ar[1] = y
-#
-#         new_ways = ways + xy_ar
-#         for x_new, y_new in new_ways:
-#
-#             if 0 <= x_new <= 79 and 0 <= y_new <= 79:
-#
-#                 if visited[x_new, y_new]:
-#                     continue
-#                 else:
-#                     visited[x, y] = True
-#
-#                     val_map = all_map[x_new, y_new, 0]
-#                     work = all_map[x_new, y_new, 3]
-#                     if val_map != 0 \
-#                             or (val_map == 4 and work == 1):
-#                         continue
-#
-#                 if val_map == 4:
-#                     while True:
-#                         x, y
-#                 else:
-#                     d_new = d + 1
-#                     if map_search[x_new, y_new, 0] > d_new:
-#                         map_search[x_new, y_new, 0] = d_new
-#                         map_search[x_new, y_new, 1] = x
-#                         map_search[x_new, y_new, 2] = y
-#
-#                     heappush(hq, (d_new, x_new, y_new))
-#
+
+@njit(float64[:](float64[:, :], int8[:, :]))
+def get_values_by_coord(val_map, coords):
+
+    values = np.zeros(coords.shape[0], dtype=np.float64)
+
+    for i, (x, y) in enumerate(coords):
+        values[i] = val_map[x, y]
+
+    return values
+
+
+@njit(int16[:](int16[:, :, :], float64[:, :], float64[:, :], float64[:, :], int8[:, :], int8[:, :], int64, int64, boolean))
+def get_best_way_fast(all_map,
+                      res_go_map,
+                      enemy_go_map,
+                      friend_go_map,
+                      near_attack,
+                      range_control,
+                      x,
+                      y,
+                      res_type=True):
+
+    if res_type:
+        go_map = res_go_map
+    else:
+        go_map = enemy_go_map
+
+    unit_coord = correct_coords_fast(all_map, near_attack, x, y, False)
+    near_ways = get_values_by_coord(go_map, unit_coord)
+
+    free_mask = near_ways > 0  # not 0 and -1
+    near_ways_free = near_ways[free_mask]
+    f = near_ways_free.shape[0]
+
+    if len(near_ways_free):
+        if res_type:
+            ind = np.argmin(near_ways_free)
+        else:
+            need_to_run = False
+
+            near_friends = get_values_by_coord(friend_go_map, unit_coord)
+            near_friends_free = near_friends[free_mask]
+
+            # check area for friends
+            x_min, y_min = max(0, x-1), max(0, y-1)
+            if np.sum(all_map[x_min:x+2, y_min: y+2, 0] == 8) == 1:
+                # check area for enemies
+                num_enemies = 0
+                control_coord = correct_coords_fast(all_map, range_control, x, y, False)
+                for xc, yc in control_coord:
+                    if all_map[xc, yc, 0] in (60, 80):
+                        num_enemies += 1
+
+                if num_enemies > 1:
+                    need_to_run = True
+
+            if not need_to_run:
+                # find best way to enemy and friend both
+                hq = [(np.float64(1), np.float64(1), np.int64(1)) for _ in range(0)]
+                for i in range(f):
+                    heappush(hq, (near_ways_free[i], near_friends_free[i], i))
+                de, df, ind = heappop(hq)
+            else:
+                ind = np.argmin(near_friends_free)
+
+        x_new, y_new = unit_coord[free_mask][ind]
+        go_map[x_new, y_new] = np.inf
+        d = near_ways_free[ind]
+        go_map[x, y] = d + 1
+    elif res_type:
+        x_new, y_new = 0, 0
+    else:
+        x_new, y_new = 70, 70
+
+    return np.array((x_new, y_new), dtype=np.int16)
+
 
 class MyStrategy:
 
@@ -456,13 +460,14 @@ class MyStrategy:
                                       for x in [-1, 2]
                                       for y in range(2)], dtype=np.int8)
 
-        house_coord = np.array(([[0, 0]] + [[x, 0] if z else [0, x]
-                                            for x in range(4, 29, 3)
+        house_coord = np.array(([[0, 0]] + [[x, 1] if z else [1, x]
+                                            for x in range(5, 33, 3)
                                             for z in range(2)
                                             if not (z == 1 and x == 0)]
                                 + [[11, 11], [16, 11], [11, 16], [21, 11], [11, 21]]
                                 + [[25, 11], [11, 25]]
                                 + [[17, 6], [22, 6], [6, 17], [6, 22]]
+                                + [[5, 2], [2, 5]]
                                 ), dtype=np.int8)
 
         self.buildings = {EntityType.RANGED_BASE: {"coords": np.array([[10, 5], [5, 10], [5, 15]], dtype=np.int8),
@@ -490,14 +495,16 @@ class MyStrategy:
         self.near_attack = np.array([[-1, 0], [0, 1], [1, 0], [0, -1]], dtype=np.int8)
 
         self.range_attack = get_unit_area(5, 1)
-        self.turret_attack = get_unit_area(5, 2)
-        self.melee_attack = get_unit_area(1, 1)
-        self.base_attack = get_unit_area(5, 5)
-        self.house_attack = get_unit_area(5, 3)
-
         self.range_control = get_unit_area(6, 1)
-        self.turret_control = get_unit_area(6, 2)
+
+        self.melee_attack = get_unit_area(1, 1)
         self.melee_control = get_unit_area(2, 1)
+
+        self.turret_attack = get_unit_area(4, 2)
+        self.turret_control = get_unit_area(5, 2)
+
+        self.base_attack = get_unit_area(4, 5)
+        self.house_attack = get_unit_area(4, 3)
 
     def debug_update(self, player_view, debug_interface):
 
@@ -565,7 +572,7 @@ class MyStrategy:
         self.all_map.fill(0)
         self.res_go_map.fill(np.inf)
         self.enemy_go_map.fill(np.inf)
-        if self.is_dark_near or not self.cur_tick % 2:
+        if self.is_dark_near:
             self.friend_go_map.fill(np.inf)
 
         self.max_population = 0
@@ -708,7 +715,7 @@ class MyStrategy:
         start = time.time()
 
         # FRIEND MAP
-        if self.is_dark_near or not self.cur_tick % 2 \
+        if self.is_dark_near \
                 and (len(list_range_units) + len(list_melee_units)) > 2:
             fill_friends_map(self.all_map, self.friend_go_map)
 
@@ -876,8 +883,6 @@ class MyStrategy:
                     or not max_houses_to_build:
                 continue
 
-            # result_search = get_list_to_build(self.all_map, building_coords, near_house_coords, size)
-
             for x_house, y_house in building_coords:
 
                 if (x_house, y_house) in dict_coord_bilder_to_houses:
@@ -1035,6 +1040,8 @@ class MyStrategy:
                 build_arr = unit_base_coord + np.array([builder_base.position.x, builder_base.position.y])
                 # check free
                 build_arr = build_arr[self.all_map[build_arr.T[0], build_arr.T[1], 0] == 0]
+                if not build_arr.shape[0]:
+                    continue
 
                 moves = self.res_go_map[build_arr.T[0], build_arr.T[1]]
                 ind_min_move = np.argmin(moves)
@@ -1153,7 +1160,15 @@ class MyStrategy:
                         self.correct_build_repair_operation(builder.id, (x_bu, y_bu), result)
                         continue
 
-            x_res, y_res = self.get_best_way(x_bu, y_bu)
+            x_res, y_res = get_best_way_fast(self.all_map,
+                                             self.res_go_map,
+                                             self.enemy_go_map,
+                                             self.friend_go_map,
+                                             self.near_attack,
+                                             self.range_control,
+                                             x_bu,
+                                             y_bu,
+                                             True)
 
             if i_need_to_run:
                 attack = None
@@ -1206,7 +1221,15 @@ class MyStrategy:
                 x_go, y_go = x_pos, y_pos
                 move = None
             else:
-                x_go, y_go = self.get_best_way(x_pos, y_pos, False)
+                x_go, y_go = get_best_way_fast(self.all_map,
+                                               self.res_go_map,
+                                               self.enemy_go_map,
+                                               self.friend_go_map,
+                                               self.near_attack,
+                                               self.range_control,
+                                               x_pos,
+                                               y_pos,
+                                               False)
                 move = MoveAction(Vec2Int(x_go, y_go), True, True)
 
             if id_enemy is None:
@@ -1323,38 +1346,3 @@ class MyStrategy:
     def draw_enemy_pole(self, coord, pos, pole):
         unit_coord = correct_coords_fast(self.all_map, coord, pos.x, pos.y, False)
         self.enemy_go_map[unit_coord[:, 0], unit_coord[:, 1]] = pole
-
-    def get_best_way(self, x, y, res_type=True):
-
-        if res_type:
-            go_map = self.res_go_map
-        else:
-            go_map = self.enemy_go_map
-            friend_map = self.friend_go_map
-
-        unit_coord = correct_coords_fast(self.all_map, self.near_attack, x, y, False)
-        near_ways = go_map[unit_coord[:, 0], unit_coord[:, 1]]
-
-        free_mask = near_ways > 0  # not 0 and -1
-        near_ways_free = near_ways[free_mask]
-
-        if len(near_ways_free):
-            if res_type \
-                    or not self.is_dark_near and not self.cur_tick % 2:
-                ind = np.argmin(near_ways_free)
-            else:
-                near_friends = friend_map[unit_coord[:, 0], unit_coord[:, 1]]
-                near_friends_free = near_friends[free_mask]
-                ind = np.lexsort((near_friends_free, near_ways_free))[0]
-
-            x_new, y_new = unit_coord[free_mask][ind]
-            go_map[x_new, y_new] = np.inf
-
-            d = near_ways_free[ind]
-            go_map[x, y] = d + 1
-        elif res_type:
-            x_new, y_new = 0, 0
-        else:
-            x_new, y_new = 70, 70
-
-        return x_new, y_new
